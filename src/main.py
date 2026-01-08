@@ -71,6 +71,7 @@ class MispricingStrategy:
         min_price_diff_percent: float = 2.0,
         discord_config: Optional[Dict[str, str]] = None,
         enable_trading: bool = False,
+        debug_mode: bool = False,
     ):
         """
         Initialize mispricing strategy.
@@ -81,6 +82,7 @@ class MispricingStrategy:
         :param min_price_diff_percent: Minimum price difference percentage to consider (default 2.0%)
         :param discord_config: Optional dict with 'token' and 'channel_id' for Discord notifications
         :param enable_trading: Whether to enable actual trading (default False for monitoring only)
+        :param debug_mode: Whether to enable verbose logging for all symbols (default False)
         """
         self.hyperliquid_client = hyperliquid_client
         self.ib_client = ib_client
@@ -92,6 +94,7 @@ class MispricingStrategy:
         self.discord_client: Optional[discord.Client] = None
         self.discord_channel: Optional[discord.TextChannel] = None
         self.enable_trading = enable_trading
+        self.debug_mode = debug_mode
         
         # Data cache with timestamps
         self.cache = {
@@ -231,12 +234,18 @@ class MispricingStrategy:
             logger.warning("⚠️  NASDAQ index data not available - cannot adjust for market moves")
         
         # Now check each stock and adjust for index movement
+        symbols_checked = 0
+        symbols_with_data = 0
         for symbol, hl_data in hyperliquid_orderbooks.items():
             # Skip the index itself
             if symbol == self.NASDAQ_HL_SYMBOL:
                 continue
             
+            symbols_checked += 1
+            
             if symbol not in ib_orderbooks:
+                if self.debug_mode:
+                    logger.debug(f"  ⚠️  {symbol}: No IB data available")
                 continue
             
             ib_data = ib_orderbooks[symbol]
@@ -246,9 +255,15 @@ class MispricingStrategy:
             ib_ask = ib_data.get("best_ask")
             
             if hl_bid is None or hl_ask is None:
+                if self.debug_mode:
+                    logger.debug(f"  ⚠️  {symbol}: Missing Hyperliquid bid/ask")
                 continue
             if ib_bid is None or ib_ask is None:
+                if self.debug_mode:
+                    logger.debug(f"  ⚠️  {symbol}: Missing IB bid/ask")
                 continue
+            
+            symbols_with_data += 1
             
             # Calculate stock-specific gap using mid prices for comparison
             hl_mid = (hl_bid + hl_ask) / 2
@@ -258,14 +273,22 @@ class MispricingStrategy:
             # Adjust for market-wide movement
             adjusted_gap_percent = stock_gap_percent - index_gap_percent
             
+            # Determine opportunity type and details (for logging)
+            opportunity_type = None
+            diff_absolute = None
+            diff_percent = None
+            meets_threshold = False
+            
             # Opportunity 1: IB best bid > HL best ask (HL underpriced)
             # But adjusted for market moves
             if ib_bid > hl_ask:
                 diff_absolute = ib_bid - hl_ask
                 diff_percent = (diff_absolute / hl_ask) * 100
+                opportunity_type = "BUY_HL"
+                meets_threshold = adjusted_gap_percent >= self.min_price_diff_percent
                 
                 # Use adjusted gap to filter
-                if adjusted_gap_percent >= self.min_price_diff_percent:
+                if meets_threshold:
                     opportunities.append({
                         "symbol": symbol,
                         "type": "BUY_HL",
@@ -289,9 +312,11 @@ class MispricingStrategy:
             elif ib_ask < hl_bid:
                 diff_absolute = hl_bid - ib_ask
                 diff_percent = (diff_absolute / ib_ask) * 100
+                opportunity_type = "SELL_HL"
+                meets_threshold = adjusted_gap_percent <= -self.min_price_diff_percent
                 
                 # Use adjusted gap to filter (negative for SELL)
-                if adjusted_gap_percent <= -self.min_price_diff_percent:
+                if meets_threshold:
                     opportunities.append({
                         "symbol": symbol,
                         "type": "SELL_HL",
@@ -309,9 +334,33 @@ class MispricingStrategy:
                         "hl_bid_qty": hl_data.get("best_bid_qty"),
                         "ib_ask_qty": ib_data.get("best_ask_qty"),
                     })
+            
+            # Log detailed info for each symbol (only in debug mode)
+            # In normal mode, only log opportunities that meet threshold
+            if self.debug_mode:
+                status_emoji = "✅" if meets_threshold else "⚪"
+                logger.info(
+                    f"{status_emoji} {symbol}: "
+                    f"HL ${hl_bid:.2f}/${hl_ask:.2f} | "
+                    f"IB ${ib_bid:.2f}/${ib_ask:.2f} | "
+                    f"Stock gap: {stock_gap_percent:+.2f}% | "
+                    f"Index gap: {index_gap_percent:+.2f}% | "
+                    f"Adjusted gap: {adjusted_gap_percent:+.2f}% | "
+                    f"{opportunity_type if opportunity_type else 'No opportunity'} "
+                    f"{'(THRESHOLD MET)' if meets_threshold else '(below threshold)' if opportunity_type else ''}"
+                )
         
         # Sort by absolute adjusted gap (highest first)
         opportunities.sort(key=lambda x: abs(x["adjusted_gap_percent"]), reverse=True)
+        
+        # Log summary
+        logger.info(
+            f"\n📊 Mispricing check summary: "
+            f"{symbols_checked} symbols checked, "
+            f"{symbols_with_data} with valid data, "
+            f"{len(opportunities)} opportunities above threshold ({self.min_price_diff_percent}%)"
+        )
+        
         return opportunities
     
     async def _init_discord(self) -> bool:
@@ -770,6 +819,11 @@ Examples:
         action="store_true",
         help="Enable actual trading (default: False, monitoring only)"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode with verbose logging for all symbols (default: False)"
+    )
     
     args = parser.parse_args()
     
@@ -781,6 +835,7 @@ Examples:
     
     logger.info(f"Starting with threshold: {args.threshold}%%, interval: {args.interval}s")
     logger.info(f"Trading: {'ENABLED ✅' if args.enable_trading else 'DISABLED (monitoring only)'}")
+    logger.info(f"Debug mode: {'ENABLED 🔍' if args.debug else 'DISABLED (normal mode)'}")
     
     # Load Discord config from environment
     discord_config = None
@@ -869,6 +924,7 @@ Examples:
             min_price_diff_percent=args.threshold,
             discord_config=discord_config,
             enable_trading=args.enable_trading,
+            debug_mode=args.debug,
         )
         
         # Start strategy
