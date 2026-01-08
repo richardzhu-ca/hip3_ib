@@ -1,0 +1,155 @@
+{
+  "last_updated": "2026-01-08T16:24:03.872704",
+  "total_symbols": 18,
+  "total_before_filtering": 30,
+  "filtering_applied": {
+    "excluded_non_stock": 6,
+    "excluded_no_orderbook": 6
+  },
+  "symbols": [
+    {
+      "symbol": "xyz:AAPL",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 259.55,
+      "best_ask": 259.64
+    },
+    {
+      "symbol": "xyz:AMD",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 209.61,
+      "best_ask": 209.63
+    },
+    {
+      "symbol": "xyz:AMZN",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 241.02,
+      "best_ask": 241.2
+    },
+    {
+      "symbol": "xyz:CL",
+      "index": null,
+      "maxLeverage": 20,
+      "onlyIsolated": true,
+      "best_bid": 56.111,
+      "best_ask": 56.152
+    },
+    {
+      "symbol": "xyz:COIN",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 243.63,
+      "best_ask": 243.66
+    },
+    {
+      "symbol": "xyz:CRCL",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 80.191,
+      "best_ask": 80.274
+    },
+    {
+      "symbol": "xyz:GOOGL",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 322.89,
+      "best_ask": 323.01
+    },
+    {
+      "symbol": "xyz:HOOD",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 116.2,
+      "best_ask": 116.22
+    },
+    {
+      "symbol": "xyz:INTC",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 42.336,
+      "best_ask": 42.349
+    },
+    {
+      "symbol": "xyz:META",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 647.34,
+      "best_ask": 648.14
+    },
+    {
+      "symbol": "xyz:MSFT",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 482.42,
+      "best_ask": 482.6
+    },
+    {
+      "symbol": "xyz:MSTR",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 160.42,
+      "best_ask": 160.53
+    },
+    {
+      "symbol": "xyz:MU",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 338.85,
+      "best_ask": 338.98
+    },
+    {
+      "symbol": "xyz:NFLX",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 90.574,
+      "best_ask": 90.632
+    },
+    {
+      "symbol": "xyz:NVDA",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 189.59,
+      "best_ask": 189.61
+    },
+    {
+      "symbol": "xyz:ORCL",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 192.33,
+      "best_ask": 192.48
+    },
+    {
+      "symbol": "xyz:PLTR",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 185.01,
+      "best_ask": 185.05
+    },
+    {
+      "symbol": "xyz:TSLA",
+      "index": null,
+      "maxLeverage": 10,
+      "onlyIsolated": true,
+      "best_bid": 431.4,
+      "best_ask": 431.44
+    }
+  ]
+}
