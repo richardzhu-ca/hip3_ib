@@ -10,6 +10,7 @@ import argparse
 import os
 import sys
 import json
+import math
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -58,7 +59,7 @@ class MispricingStrategy:
     
     # NASDAQ index symbols
     NASDAQ_HL_SYMBOL = "xyz:XYZ100"
-    NASDAQ_IB_SYMBOL = "NDX-USD-PERP"
+    NASDAQ_IB_SYMBOL = "xyz:MNQ"  # Micro E-mini NASDAQ-100 Futures
     
     # Trading parameters
     NOTIONAL_VALUE_USD = 200.0  # Fixed notional value per trade
@@ -131,6 +132,60 @@ class MispricingStrategy:
             logger.error(f"Error loading HIP3 symbols: {e}")
             return []
     
+    def _get_mnq_days_to_expiration(self) -> Optional[int]:
+        """
+        Calculate days until MNQ futures expiration.
+        
+        MNQ expires on the 3rd Friday of the expiration month (quarterly: Mar, Jun, Sep, Dec).
+        
+        :return: Number of days until expiration, or None if cannot calculate
+        """
+        try:
+            now = datetime.now()
+            current_year = now.year
+            current_month = now.month
+            
+            # Quarterly months for index futures
+            quarterly_months = [3, 6, 9, 12]
+            
+            # Find next quarterly month
+            expiration_month = None
+            expiration_year = current_year
+            
+            for month in quarterly_months:
+                if month > current_month:
+                    expiration_month = month
+                    break
+                elif month == current_month and now.day <= 7:
+                    # Still in expiration month, before day 7
+                    expiration_month = month
+                    break
+            
+            # If no quarterly month found this year, use March of next year
+            if expiration_month is None:
+                expiration_month = 3
+                expiration_year += 1
+            
+            # Calculate 3rd Friday of expiration month
+            # Start with first day of the month
+            first_day = datetime(expiration_year, expiration_month, 1)
+            
+            # Find first Friday (weekday 4 = Friday)
+            days_until_friday = (4 - first_day.weekday()) % 7
+            first_friday = first_day.replace(day=1 + days_until_friday)
+            
+            # 3rd Friday is 2 weeks later
+            third_friday = first_friday.replace(day=first_friday.day + 14)
+            
+            # Calculate days until expiration
+            days_until = (third_friday - now).days
+            
+            return max(0, days_until)  # Don't return negative days
+            
+        except Exception as e:
+            logger.warning(f"Error calculating MNQ expiration: {e}")
+            return None
+    
     async def fetch_hyperliquid_orderbooks(self, symbols: List[str]) -> Dict[str, Dict]:
         """
         Fetch orderbook data from Hyperliquid for multiple symbols.
@@ -166,6 +221,8 @@ class MispricingStrategy:
         """
         Fetch orderbook data (bid/ask) from Interactive Brokers TWS API.
         
+        Automatically includes NASDAQ index futures (MNQ) for market adjustment.
+        
         :param symbols: List of symbols to fetch
         :return: Dictionary mapping symbol to {best_bid, best_ask, best_bid_qty, best_ask_qty}
         """
@@ -180,8 +237,13 @@ class MispricingStrategy:
                 logger.error("Failed to connect to IB - returning empty orderbooks")
                 return {}
         
+        # Ensure NASDAQ futures index is included for market adjustment
+        ib_symbols = symbols.copy()
+        if self.NASDAQ_IB_SYMBOL not in ib_symbols:
+            ib_symbols.append(self.NASDAQ_IB_SYMBOL)
+        
         # Fetch orderbooks using batch method
-        orderbooks = await self.ib_client.get_orderbooks_batch(symbols, max_concurrent=10)
+        orderbooks = await self.ib_client.get_orderbooks_batch(ib_symbols, max_concurrent=10)
         return orderbooks
     
     def calculate_mispricing_opportunities(
@@ -195,7 +257,7 @@ class MispricingStrategy:
         
         Adjustment Logic:
         1. Calculate stock_gap = (HL_stock - IB_stock) / IB_stock
-        2. Calculate index_gap = (HL_NASDAQ - IB_NASDAQ) / IB_NASDAQ
+        2. Calculate index_gap = (HL_NASDAQ - IB_MNQ) / IB_MNQ
         3. adjusted_gap = stock_gap - index_gap
         
         This filters out market-wide moves (e.g., during pre-market when IB is stale).
@@ -216,7 +278,7 @@ class MispricingStrategy:
         # First, calculate the NASDAQ index gap for market adjustment
         index_gap_percent = 0.0
         nasdaq_hl_data = hyperliquid_orderbooks.get(self.NASDAQ_HL_SYMBOL)
-        nasdaq_ib_data = ib_orderbooks.get("xyz:NDX")
+        nasdaq_ib_data = ib_orderbooks.get(self.NASDAQ_IB_SYMBOL)
         
         if nasdaq_hl_data and nasdaq_ib_data:
             nasdaq_hl_bid = nasdaq_hl_data.get("best_bid")
@@ -227,9 +289,37 @@ class MispricingStrategy:
             if all([nasdaq_hl_bid, nasdaq_hl_ask, nasdaq_ib_bid, nasdaq_ib_ask]):
                 # Use mid prices for index comparison
                 nasdaq_hl_mid = (nasdaq_hl_bid + nasdaq_hl_ask) / 2
-                nasdaq_ib_mid = (nasdaq_ib_bid + nasdaq_ib_ask) / 2
+                nasdaq_ib_mid_raw = (nasdaq_ib_bid + nasdaq_ib_ask) / 2
+                
+                # Discount MNQ futures price to present value
+                # MNQ is a futures contract, needs to be discounted to compare with spot index
+                # Formula: Spot = Futures * exp(-r * T)
+                # r = risk-free rate (4% = 0.04)
+                # T = time to maturity in years
+                
+                # Get days until expiration from IB client
+                days_until_expiration = self._get_mnq_days_to_expiration()
+                
+                if days_until_expiration is not None and days_until_expiration > 0:
+                    T = days_until_expiration / 365.0  # Convert days to years
+                    r = 0.04  # 4% risk-free rate
+                    
+                    # Discount futures to present value
+                    nasdaq_ib_mid = round(nasdaq_ib_mid_raw * math.exp(-r * T), 2)
+                    discount_factor = math.exp(-r * T)
+                    
+                    logger.info(
+                        f"📊 MNQ discount: Raw=${nasdaq_ib_mid_raw:.2f}, "
+                        f"Discounted=${nasdaq_ib_mid:.2f} "
+                        f"(T={T:.4f}y, discount={discount_factor:.6f})"
+                    )
+                else:
+                    # If can't get expiration, use raw price (no discount)
+                    nasdaq_ib_mid = nasdaq_ib_mid_raw
+                    logger.warning("⚠️  Could not determine MNQ expiration - using raw futures price")
+                
                 index_gap_percent = ((nasdaq_hl_mid - nasdaq_ib_mid) / nasdaq_ib_mid) * 100
-                logger.info(f"📊 NASDAQ index gap: {index_gap_percent:.2f}% (HL: ${nasdaq_hl_mid:.2f}, IB: ${nasdaq_ib_mid:.2f})")
+                logger.info(f"📊 NASDAQ index gap: {index_gap_percent:.2f}% (HL: ${nasdaq_hl_mid:.2f}, IB MNQ: ${nasdaq_ib_mid:.2f})")
         else:
             logger.warning("⚠️  NASDAQ index data not available - cannot adjust for market moves")
         
@@ -884,7 +974,6 @@ Examples:
                     },
                     strategy_name="hip3_ib_mispricing",
                     use_dca=True,
-                    default_dca_size=0.01,  # Will be overridden per trade
                     timeout_seconds=60,
                     best_effort_completion=True,
                 )
@@ -902,7 +991,7 @@ Examples:
     ib_client = IBClient(
         host="127.0.0.1",
         port=7496,  # TWS port (7496 for live, 7497 for paper trading)
-        client_id=3,
+        client_id=5,
         use_paper_trading=True
     )
     

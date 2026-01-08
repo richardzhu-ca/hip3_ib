@@ -12,7 +12,7 @@ from typing import Dict, Optional, List
 from datetime import datetime
 
 try:
-    from ib_insync import IB, Stock, Contract, util
+    from ib_insync import IB, Stock, Future, Contract, util
     IB_INSYNC_AVAILABLE = True
 except ImportError:
     IB_INSYNC_AVAILABLE = False
@@ -358,33 +358,137 @@ class IBClient:
         finally:
             self.connected = False
     
+    def _get_futures_expiration(self, symbol: str) -> Optional[str]:
+        """
+        Get the current front-month futures expiration for a given symbol.
+        
+        Returns YYYYMM format for the nearest quarterly expiration.
+        For NASDAQ futures (MNQ/NQ), quarterly months are Mar, Jun, Sep, Dec.
+        
+        Will warn if we're within 2 weeks of expiration (should roll to next contract).
+        
+        :param symbol: Futures symbol (e.g., "MNQ", "NQ")
+        :return: Expiration in YYYYMM format (e.g., "202603") or None
+        """
+        from datetime import datetime, timedelta
+        
+        # Quarterly months for index futures (Mar=3, Jun=6, Sep=9, Dec=12)
+        quarterly_months = [3, 6, 9, 12]
+        
+        now = datetime.now()
+        current_year = now.year
+        current_month = now.month
+        current_day = now.day
+        
+        # Futures typically expire on the 3rd Friday of the expiration month
+        # We should roll to next contract about 1-2 weeks before expiration
+        
+        # Find next quarterly month
+        next_quarterly = None
+        expiration_year = current_year
+        
+        for month in quarterly_months:
+            if month > current_month:
+                next_quarterly = month
+                break
+            elif month == current_month:
+                # If we're in the expiration month, check if we're too close to expiration
+                # 3rd Friday is usually around day 15-21
+                # If we're past day 7, roll to next quarter
+                if current_day > 7:
+                    # Too close to expiration, use next quarter
+                    logger.warning(
+                        f"⚠️  Current futures contract for {symbol} expires in {month}/{current_year}. "
+                        f"Consider rolling to next quarter!"
+                    )
+                    continue
+                else:
+                    next_quarterly = month
+                    break
+        
+        # If no quarterly month found this year, use March of next year
+        if next_quarterly is None:
+            next_quarterly = 3
+            expiration_year += 1
+        
+        # Format as YYYYMM
+        expiration = f"{expiration_year}{next_quarterly:02d}"
+        
+        # Check if we're within 2 weeks of expiration and warn
+        try:
+            # Calculate approximate expiration date (3rd Friday = ~day 19)
+            expiration_date = datetime(expiration_year, next_quarterly, 19)
+            days_until_expiration = (expiration_date - now).days
+            
+            if 0 < days_until_expiration <= 14:
+                logger.warning(
+                    f"⚠️  Futures contract {symbol} {expiration} expires in ~{days_until_expiration} days. "
+                    f"Consider rolling to next quarter!"
+                )
+        except Exception:
+            pass  # Don't fail if date calculation has issues
+        
+        logger.debug(f"Using futures expiration {expiration} for {symbol}")
+        return expiration
+    
     def _hip3_symbol_to_ib_contract(self, hip3_symbol: str) -> Optional[Contract]:
         """
         Convert HIP3 symbol to IB Contract.
         
-        HIP3 symbols are like: "xyz:AAPL", "xyz:TSLA"
+        HIP3 symbols are like: "xyz:AAPL", "xyz:TSLA", "xyz:MNQ"
         IB needs: Stock contract with symbol, secType, exchange, currency
+                  OR Future contract with symbol, expiration, exchange, currency
         
-        :param hip3_symbol: HIP3 symbol (e.g., "xyz:AAPL")
+        Special handling for futures:
+        - MNQ: Micro E-mini NASDAQ-100 Futures (exchange: CME)
+        - NQ: E-mini NASDAQ-100 Futures (exchange: CME)
+        
+        :param hip3_symbol: HIP3 symbol (e.g., "xyz:AAPL", "xyz:MNQ")
         :return: IB Contract or None
         """
         try:
-            # Parse HIP3 symbol: "xyz:AAPL" -> symbol="AAPL", quote="USD"
+            # Parse HIP3 symbol: "xyz:AAPL" -> symbol="AAPL"
             parts = hip3_symbol.split(":")
             if len(parts) >= 2:
-                symbol = parts[1]  # e.g., "AAPL"
-                quote = "USD"
+                symbol = parts[1]  # e.g., "AAPL", "MNQ"
                 
-                # Create IB Contract object (matching the example format)
-                contract = Contract()
-                contract.symbol = symbol
-                contract.secType = "STK"  # Stock
-                contract.exchange = "SMART"  # Smart routing
-                contract.currency = quote
-                # Note: primaryExchange can be set if known (e.g., "NASDAQ", "NYSE")
-                # But SMART routing will find the best exchange automatically
+                # Check if this is a known futures symbol
+                futures_symbols = {
+                    "MNQ": {"exchange": "CME", "currency": "USD"},  # Micro E-mini NASDAQ-100
+                    "NQ": {"exchange": "CME", "currency": "USD"},   # E-mini NASDAQ-100
+                    "ES": {"exchange": "CME", "currency": "USD"},   # E-mini S&P 500
+                    "MES": {"exchange": "CME", "currency": "USD"},  # Micro E-mini S&P 500
+                }
                 
-                return contract
+                if symbol in futures_symbols:
+                    # Create futures contract
+                    config = futures_symbols[symbol]
+                    expiration = self._get_futures_expiration(symbol)
+                    
+                    if not expiration:
+                        logger.warning(f"Could not determine expiration for futures {symbol}")
+                        return None
+                    
+                    contract = Future(
+                        symbol=symbol,
+                        lastTradeDateOrContractMonth=expiration,
+                        exchange=config["exchange"],
+                        currency=config["currency"]
+                    )
+                    
+                    logger.debug(f"Created futures contract: {symbol} exp={expiration} on {config['exchange']}")
+                    return contract
+                else:
+                    # Create stock contract
+                    contract = Contract()
+                    contract.symbol = symbol
+                    contract.secType = "STK"  # Stock
+                    contract.exchange = "SMART"  # Smart routing
+                    contract.currency = "USD"
+                    # Note: primaryExchange can be set if known (e.g., "NASDAQ", "NYSE")
+                    # But SMART routing will find the best exchange automatically
+                    
+                    return contract
             else:
                 logger.warning(f"Could not parse HIP3 symbol: {hip3_symbol}")
                 return None

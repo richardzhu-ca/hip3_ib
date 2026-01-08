@@ -37,7 +37,7 @@ except ImportError as e:
 
 
 # Known non-stock symbols to exclude (crypto, commodities, etc.)
-NON_STOCK_SYMBOLS = {"GOLD", "SILVER", "USDJPY", "XYZ100", "JPY", "EUR", "SKHX"}
+NON_STOCK_SYMBOLS = {"GOLD", "SILVER", "USDJPY", "XYZ100", "JPY", "EUR", "SKHX", "CL"}
 
 def is_stock_symbol(base_symbol: str) -> bool:
     """
