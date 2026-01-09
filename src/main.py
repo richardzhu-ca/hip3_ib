@@ -73,6 +73,7 @@ class MispricingStrategy:
         discord_config: Optional[Dict[str, str]] = None,
         enable_trading: bool = False,
         debug_mode: bool = False,
+        leverage: float = 10.0,
     ):
         """
         Initialize mispricing strategy.
@@ -84,6 +85,7 @@ class MispricingStrategy:
         :param discord_config: Optional dict with 'token' and 'channel_id' for Discord notifications
         :param enable_trading: Whether to enable actual trading (default False for monitoring only)
         :param debug_mode: Whether to enable verbose logging for all symbols (default False)
+        :param leverage: Leverage multiplier for order size (default 10.0)
         """
         self.hyperliquid_client = hyperliquid_client
         self.ib_client = ib_client
@@ -96,6 +98,7 @@ class MispricingStrategy:
         self.discord_channel: Optional[discord.TextChannel] = None
         self.enable_trading = enable_trading
         self.debug_mode = debug_mode
+        self.leverage = leverage
         
         # Data cache with timestamps
         self.cache = {
@@ -642,8 +645,9 @@ class MispricingStrategy:
         execute_price = opportunity["execute_price"]
         
         # Calculate order size from notional value
-        # order_size = notional_value / price
-        order_size = int(order_value / execute_price)
+        # order_size = (notional_value / price) * leverage
+        # Round to 8 decimal places (common precision for crypto exchanges)
+        order_size = round((order_value / execute_price) * self.leverage, 8)
         
         # Determine side: BUY_HL -> buy, SELL_HL -> sell
         side = "buy" if trade_type == "BUY_HL" else "sell"
@@ -651,6 +655,7 @@ class MispricingStrategy:
         logger.info(f"\n{'='*60}")
         logger.info(f"🔥 EXECUTING TRADE: {side.upper()} {symbol}")
         logger.info(f"   Notional value: ${self.NOTIONAL_VALUE_USD:.2f}")
+        logger.info(f"   Leverage: {self.leverage}x")
         logger.info(f"   Execute price: ${execute_price:.2f}")
         logger.info(f"   Order size: {order_size:.4f}")
         logger.info(f"   Adjusted gap: {opportunity['adjusted_gap_percent']:.2f}%")
@@ -914,6 +919,12 @@ Examples:
         action="store_true",
         help="Enable debug mode with verbose logging for all symbols (default: False)"
     )
+    parser.add_argument(
+        "--leverage",
+        type=float,
+        default=10.0,
+        help="Leverage multiplier for order size (default: 10.0)"
+    )
     
     args = parser.parse_args()
     
@@ -922,10 +933,13 @@ Examples:
         parser.error("--threshold must be greater than 0")
     if args.interval < 1:
         parser.error("--interval must be at least 1 second")
+    if args.leverage <= 0:
+        parser.error("--leverage must be greater than 0")
     
     logger.info(f"Starting with threshold: {args.threshold}%%, interval: {args.interval}s")
     logger.info(f"Trading: {'ENABLED ✅' if args.enable_trading else 'DISABLED (monitoring only)'}")
     logger.info(f"Debug mode: {'ENABLED 🔍' if args.debug else 'DISABLED (normal mode)'}")
+    logger.info(f"Leverage: {args.leverage}x")
     
     # Load Discord config from environment
     discord_config = None
@@ -1014,6 +1028,7 @@ Examples:
             discord_config=discord_config,
             enable_trading=args.enable_trading,
             debug_mode=args.debug,
+            leverage=args.leverage,
         )
         
         # Start strategy

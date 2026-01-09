@@ -201,7 +201,9 @@ class PQuantBackend(ExecutionBackend):
             
             # Map parameters
             sdk_side = Side.BUY if side.lower() == "buy" else Side.SELL
-            dca_size = kwargs.get("dca_size", self.default_dca_size) or size
+            # DCA size should not exceed total size
+            dca_size_raw = kwargs.get("dca_size", self.default_dca_size) or size
+            dca_size = min(dca_size_raw, size)  # Ensure DCA size doesn't exceed total size
             timeout = kwargs.get("timeout", self.timeout_seconds)
             
             # Instrument type
